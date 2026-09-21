@@ -17,6 +17,9 @@ export type SceneObject = {
   position: [number, number, number]
   scale: [number, number, number]
   rotation: [number, number, number]
+  assetUrl?: string
+  thumbnailUrl?: string
+  generated?: boolean
 }
 
 export type SceneSnapshot = {
@@ -67,4 +70,12 @@ export type TranscriptMessage = {
   role: 'user' | 'assistant'
   text: string
   status?: 'partial' | 'final'
+}
+
+export type GenerationState = {
+  status: 'IDLE' | 'GENERATING' | 'READY' | 'ERROR' | 'CANCELED'
+  taskId?: string
+  progress: number
+  prompt?: string
+  error?: string
 }

@@ -292,6 +292,8 @@ export function applySceneTool(scene: SceneState, toolName: string, args: ToolAr
     pushSceneHistory(scene)
     const position = parseArray(args.position) ?? [0, 0, 0]
     const scale = parseArray(args.scale) ?? [1, 1, 1]
+    const assetUrl = typeof args.assetUrl === 'string' ? args.assetUrl : undefined
+    const thumbnailUrl = typeof args.thumbnailUrl === 'string' ? args.thumbnailUrl : undefined
 
     scene.objects = [
       ...scene.objects,
@@ -303,6 +305,9 @@ export function applySceneTool(scene: SceneState, toolName: string, args: ToolAr
         position: [position[0] ?? 0, position[1] ?? 0, position[2] ?? 0] as [number, number, number],
         scale: [scale[0] ?? 1, scale[1] ?? 1, scale[2] ?? 1] as [number, number, number],
         rotation: [0, 0, 0],
+        assetUrl,
+        thumbnailUrl,
+        generated: Boolean(assetUrl),
       },
     ]
     scene.selectedId = objectId
