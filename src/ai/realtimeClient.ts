@@ -1,6 +1,7 @@
 import { parseTextCommand } from './realtimeTools'
-import { createInitialScene } from '../scene/sceneTools'
-import type { ConnectionState, SceneState, TranscriptMessage } from '../types/scene'
+import { generate3DModel } from './generationClient'
+import { applySceneTool, createInitialScene } from '../scene/sceneTools'
+import type { ConnectionState, GenerationState, SceneState, TranscriptMessage } from '../types/scene'
 
 export type RealtimeClientListener<T> = (value: T) => void
 
@@ -10,6 +11,7 @@ export class RealtimeAIClient {
   private onStatusChange: RealtimeClientListener<ConnectionState> | null = null
   private onTranscriptChange: RealtimeClientListener<TranscriptMessage[]> | null = null
   private onSceneChange: RealtimeClientListener<SceneState> | null = null
+  private onGenerationChange: RealtimeClientListener<GenerationState> | null = null
   private micStream: MediaStream | null = null
 
   onStatus(listener: RealtimeClientListener<ConnectionState>): void {
@@ -22,6 +24,10 @@ export class RealtimeAIClient {
 
   onScene(listener: RealtimeClientListener<SceneState>): void {
     this.onSceneChange = listener
+  }
+
+  onGeneration(listener: RealtimeClientListener<GenerationState>): void {
+    this.onGenerationChange = listener
   }
 
   public get currentStatus(): ConnectionState {
@@ -95,6 +101,33 @@ export class RealtimeAIClient {
     this.setStatus('THINKING')
 
     await new Promise((resolve) => window.setTimeout(resolve, 160))
+
+    if (/^(create|generate|make|build)\b/.test(text.trim().toLowerCase()) && /(3d|model|asset|bike|vehicle|chair|lamp|helmet)/.test(text.toLowerCase())) {
+      try {
+        this.setStatus('EXECUTING')
+        const asset = await generate3DModel(text.trim(), (state) => {
+          this.onGenerationChange?.(state)
+          this.setStatus(state.status === 'GENERATING' ? 'EXECUTING' : 'CONNECTED')
+        })
+        const result = applySceneTool(scene, 'createObject', {
+          objectId: asset.id,
+          name: asset.name,
+          type: 'generated-model',
+          assetUrl: asset.modelUrl,
+          thumbnailUrl: asset.thumbnailUrl,
+          position: [0, 0.8, 0],
+          scale: [1, 1, 1],
+        })
+        updateScene(result.scene)
+        this.onSceneChange?.(result.scene)
+        this.addAssistantMessage(`${asset.name} is ready and added to the scene.`)
+      } catch (error) {
+        this.setStatus('ERROR')
+        this.addAssistantMessage(error instanceof Error ? error.message : '3D generation failed.')
+        this.setStatus('CONNECTED')
+      }
+      return
+    }
 
     const result = parseTextCommand(text, scene)
     this.setStatus('EXECUTING')

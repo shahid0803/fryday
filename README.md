@@ -1,32 +1,52 @@
-# React + TypeScript + Vite
+# NOVA — AI 3D Design Copilot
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+NOVA is a cinematic React + Three.js workspace for conversational 3D scene editing. Phase 3 adds a provider-backed text-to-3D pipeline: a generation request becomes an asynchronous task, progress is polled, the returned GLB is normalized and imported into the live scene, and the generated object remains available to later scene commands.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Futuristic React Three Fiber workspace with procedural bike scene
+- Typed scene command layer with selection, move, scale, remove, undo, and reset
+- Server-only OpenAI and Meshy credentials
+- `generate3DModel` provider boundary with Meshy implementation
+- Async generation routes with progress, cancellation, validation, and basic rate limiting
+- GLB import through `GLTFLoader` with automatic centering and scale normalization
+- Explicit development mock mode for UI testing without provider credentials
 
-## React Compiler
+## Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+copy .env.example .env
+npm run dev:full
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The Vite app runs on `http://localhost:5173` and proxies `/api` requests to the server on port `3001`.
+
+Configure `.env` on the server:
+
+```env
+OPENAI_API_KEY=...
+MESHY_API_KEY=...
+PORT=3001
+ENABLE_3D_MOCKS=false
+```
+
+`MESHY_API_KEY` is never sent to the browser. Set `ENABLE_3D_MOCKS=true` only in development to exercise task progress without spending provider credits; the mock is disabled in production.
+
+## Generation API
+
+- `POST /api/3d/text-to-3d` — creates a Meshy preview task
+- `GET /api/3d/tasks/:taskId` — returns normalized task status and the GLB URL when ready
+- `POST /api/3d/tasks/:taskId/cancel` — requests task deletion/cancellation
+
+The server uses Meshy’s current v2 text-to-3D API and maps `model_urls.glb` to the safe `modelUrl` field returned to the client.
+
+## Validation
+
+```bash
+npm run build
+npx vitest run
+npm run lint
+```
+
+Generated GLB files are loaded from the provider URL at runtime and are intentionally not committed to Git.

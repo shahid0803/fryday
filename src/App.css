@@ -335,6 +335,52 @@
   padding: 1rem 1rem 0;
 }
 
+.generation-overlay {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(126, 243, 214, 0.28);
+  background: rgba(5, 16, 18, 0.88);
+  color: #e9fffb;
+  font-size: 0.58rem;
+  letter-spacing: 0.12rem;
+  text-transform: uppercase;
+  box-shadow: 0 0 30px rgba(74, 230, 201, 0.12);
+}
+
+.generation-overlay strong,
+.generation-overlay span {
+  display: block;
+}
+
+.generation-overlay span {
+  margin-top: 0.25rem;
+  color: rgba(192, 224, 222, 0.72);
+  font-size: 0.5rem;
+  letter-spacing: 0.06rem;
+  text-transform: none;
+}
+
+.generation-progress {
+  grid-column: 1 / -1;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(126, 243, 214, 0.12);
+}
+
+.generation-progress span {
+  height: 100%;
+  margin: 0;
+  background: #7ef3d6;
+  box-shadow: 0 0 12px rgba(126, 243, 214, 0.8);
+}
+
 .viewport-status,
 .viewport-pill {
   display: inline-flex;

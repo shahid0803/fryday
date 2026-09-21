@@ -1,14 +1,15 @@
 import { Canvas } from '@react-three/fiber'
-import { Grid, Line, OrbitControls, TransformControls } from '@react-three/drei'
+import { Grid, Line, OrbitControls, TransformControls, useGLTF } from '@react-three/drei'
 import { ArrowUpRight, BellDot, Command, Cpu, Eye, EyeOff, Gauge, Layers3, Move3d, Settings, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import * as THREE from 'three'
 import type { Object3D } from 'three'
 
 import { RealtimeAIClient } from './ai/realtimeClient'
 import { AssistantPanel } from './components/AssistantPanel'
 import { VoiceButton } from './components/VoiceButton'
 import { createInitialScene } from './scene/sceneTools'
-import type { ConnectionState, TranscriptMessage } from './types/scene'
+import type { ConnectionState, GenerationState, TranscriptMessage } from './types/scene'
 import './App.css'
 
 const APP_NAME = 'NOVA'
@@ -16,6 +17,7 @@ const APP_NAME = 'NOVA'
 function App() {
   const [scene, setScene] = useState(() => createInitialScene())
   const [status, setStatus] = useState<ConnectionState>('OFFLINE')
+  const [generation, setGeneration] = useState<GenerationState>({ status: 'IDLE', progress: 0 })
   const [draft, setDraft] = useState('Remove the rear wheel.')
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([
     {
@@ -33,6 +35,7 @@ function App() {
     client.onStatus(setStatus)
     client.onTranscript(setTranscript)
     client.onScene(setScene)
+    client.onGeneration(setGeneration)
     void client.connect()
     clientRef.current = client
 
@@ -137,6 +140,16 @@ function App() {
               </div>
               <div className="viewport-pill">SELECTED: {scene.selectedId.toUpperCase()}</div>
             </div>
+            {generation.status === 'GENERATING' && (
+              <div className="generation-overlay">
+                <Sparkles size={14} />
+                <div>
+                  <strong>GENERATING 3D MODEL</strong>
+                  <span>{generation.prompt ?? 'Preparing asset'} · {generation.progress}%</span>
+                </div>
+                <div className="generation-progress"><span style={{ width: `${generation.progress}%` }} /></div>
+              </div>
+            )}
           </div>
         </main>
 
@@ -180,13 +193,11 @@ function SceneNodeRow({
   selected: boolean
   onSelect: (objectId: string) => void
 }) {
-  const Icon = getObjectIcon(object.id)
-
   return (
     <div className="scene-branch">
       <button type="button" className={`scene-node ${selected ? 'selected' : ''}`} onClick={() => onSelect(object.id)}>
         <span className="scene-node-icon">
-          <Icon size={12} />
+          {renderObjectIcon(object.id)}
         </span>
         <span className="scene-node-label">{object.name}</span>
         <span className="scene-node-visibility">{object.visible ? <Eye size={10} /> : <EyeOff size={10} />}</span>
@@ -195,23 +206,23 @@ function SceneNodeRow({
   )
 }
 
-function getObjectIcon(objectId: string) {
+function renderObjectIcon(objectId: string) {
   switch (objectId) {
     case 'frame':
-      return Layers3
+      return <Layers3 size={12} />
     case 'front-wheel':
     case 'rear-wheel':
-      return Move3d
+      return <Move3d size={12} />
     case 'handlebar':
-      return Sparkles
+      return <Sparkles size={12} />
     case 'seat':
     case 'pedals':
-      return Gauge
+      return <Gauge size={12} />
     case 'chain':
     case 'engine':
-      return Cpu
+      return <Cpu size={12} />
     default:
-      return Layers3
+      return <Layers3 size={12} />
   }
 }
 
@@ -283,11 +294,27 @@ function ModelPart({
           onSelect(object.id)
         }}
       >
-        {renderObjectMesh(object)}
+        {object.assetUrl ? <GeneratedModel url={object.assetUrl} /> : renderObjectMesh(object)}
       </group>
       {selected && <TransformControls object={ref as React.RefObject<Object3D>} mode="translate" size={0.7} />}
     </>
   )
+}
+
+function GeneratedModel({ url }: { url: string }) {
+  const { scene } = useGLTF(url)
+  const model = useMemo(() => {
+    const clone = scene.clone(true)
+    const box = new THREE.Box3().setFromObject(clone)
+    const size = box.getSize(new THREE.Vector3())
+    const maxDimension = Math.max(size.x, size.y, size.z, 0.001)
+    const factor = 2.5 / maxDimension
+    clone.scale.setScalar(factor)
+    const center = box.getCenter(new THREE.Vector3())
+    clone.position.set(-center.x * factor, -center.y * factor, -center.z * factor)
+    return clone
+  }, [scene])
+  return <primitive object={model} />
 }
 
 function renderObjectMesh(object: ReturnType<typeof createInitialScene>['objects'][number]) {

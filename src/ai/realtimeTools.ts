@@ -3,6 +3,15 @@ import type { SceneState, ToolDefinition, ToolResult } from '../types/scene'
 
 export const toolCatalog: ToolDefinition[] = [
   {
+    name: 'generate3DModel',
+    description: 'Generate a new conceptual 3D asset from a text prompt. Use only for genuinely new assets.',
+    parameters: {
+      type: 'object',
+      properties: { prompt: { type: 'string', description: 'Description of the new 3D asset.' } },
+      required: ['prompt'],
+    },
+  },
+  {
     name: 'createObject',
     description: 'Create a new object in the scene.',
     parameters: {
@@ -139,7 +148,6 @@ function describeTargetObject(text: string, scene: SceneState): string | null {
       return 'front-wheel'
     }
   }
-  return null
   return null
 }
 
