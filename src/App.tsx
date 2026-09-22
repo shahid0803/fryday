@@ -9,7 +9,8 @@ import { SceneHierarchy } from './components/SceneHierarchy'
 import { TelemetryOverlay } from './components/TelemetryOverlay'
 import { TopBar } from './components/TopBar'
 import { Viewport } from './components/Viewport'
-import { applySceneTool, createInitialScene } from './scene/sceneTools'
+import type { TransformUpdate } from './components/Viewport'
+import { createInitialScene, executeSceneCommand } from './scene/sceneTools'
 import type { ConnectionState, GenerationState, SceneState, TranscriptMessage } from './types/scene'
 import './App.css'
 
@@ -20,6 +21,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('WORKSPACE')
   const [leftPanelOpen, setLeftPanelOpen] = useState(true)
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
+  const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('translate')
 
   // Cinematic intro: bypass if previously seen in this browser
   const [showIntro, setShowIntro] = useState(() => {
@@ -50,8 +52,21 @@ export default function App() {
     void client.connect()
     clientRef.current = client
 
+    // Keyboard shortcuts for transform mode (W, E, R)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeElement = document.activeElement
+      const isInput = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement
+      if (isInput) return
+
+      if (e.key === 'w' || e.key === 'W') setTransformMode('translate')
+      if (e.key === 'e' || e.key === 'E') setTransformMode('rotate')
+      if (e.key === 'r' || e.key === 'R') setTransformMode('scale')
+    }
+    window.addEventListener('keydown', handleKeyDown)
+
     return () => {
       client.stopListening()
+      window.removeEventListener('keydown', handleKeyDown)
     }
   }, [])
 
@@ -68,20 +83,28 @@ export default function App() {
     setShowIntro(true)
   }
 
+  // Unified Command Bus dispatches:
   const handleSelectObject = (objectId: string) => {
-    setScene((prev) => ({ ...prev, selectedId: objectId }))
-  }
-
-  // Toggle visibility directly updates scene state & history (resolves Bug C)
-  const handleToggleVisibility = (objectId: string, currentVisible: boolean) => {
-    const action = currentVisible ? 'hideObject' : 'showObject'
-    const outcome = applySceneTool(scene, action, { objectId })
+    const outcome = executeSceneCommand(scene, { type: 'selectObject', objectId })
     setScene(outcome.scene)
   }
 
-  // Transform controls movement commits to scene state (resolves Bug B)
-  const handleTransformChange = (objectId: string, position: [number, number, number]) => {
-    const outcome = applySceneTool(scene, 'moveObject', { objectId, position })
+  const handleToggleVisibility = (objectId: string, currentVisible: boolean) => {
+    const outcome = executeSceneCommand(scene, {
+      type: currentVisible ? 'hideObject' : 'showObject',
+      objectId,
+    })
+    setScene(outcome.scene)
+  }
+
+  const handleTransformChange = (objectId: string, transform: TransformUpdate) => {
+    const outcome = executeSceneCommand(scene, {
+      type: 'setTransform',
+      objectId,
+      position: transform.position,
+      rotation: transform.rotation,
+      scale: transform.scale,
+    })
     setScene(outcome.scene)
   }
 
@@ -142,6 +165,7 @@ export default function App() {
           <Viewport
             objects={scene.objects}
             selectedId={scene.selectedId}
+            transformMode={transformMode}
             onSelect={handleSelectObject}
             onTransformChange={handleTransformChange}
           />
@@ -150,6 +174,8 @@ export default function App() {
           <TelemetryOverlay
             selectedObject={selectedObject}
             totalObjects={scene.objects.length}
+            transformMode={transformMode}
+            onSetTransformMode={setTransformMode}
           />
 
           {/* 3D Generation Progress Overlay */}

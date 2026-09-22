@@ -1,6 +1,6 @@
 import { parseTextCommand } from './realtimeTools'
 import { generate3DModel } from './generationClient'
-import { applySceneTool, createInitialScene } from '../scene/sceneTools'
+import { executeSceneCommand, createInitialScene } from '../scene/sceneTools'
 import type { ConnectionState, GenerationState, SceneState, TranscriptMessage } from '../types/scene'
 
 export type RealtimeClientListener<T> = (value: T) => void
@@ -108,14 +108,16 @@ export class RealtimeAIClient {
           this.onGenerationChange?.(state)
           this.setStatus(state.status === 'GENERATING' ? 'EXECUTING' : 'CONNECTED')
         })
-        const result = applySceneTool(scene, 'createObject', {
-          objectId: asset.id,
-          name: asset.name,
-          type: 'generated-model',
-          assetUrl: asset.modelUrl,
-          thumbnailUrl: asset.thumbnailUrl,
-          position: [0, 0.8, 0],
-          scale: [1, 1, 1],
+        const result = executeSceneCommand(scene, {
+          type: 'insertGeneratedAsset',
+          asset: {
+            id: asset.id,
+            name: asset.name,
+            modelUrl: asset.modelUrl,
+            thumbnailUrl: asset.thumbnailUrl,
+            position: [0, 0.8, 0],
+            scale: [1, 1, 1],
+          },
         })
         updateScene(result.scene)
         this.onSceneChange?.(result.scene)

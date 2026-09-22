@@ -5,11 +5,18 @@ import * as THREE from 'three'
 import type { Object3D } from 'three'
 import type { SceneObject } from '../types/scene'
 
+export type TransformUpdate = {
+  position?: [number, number, number]
+  rotation?: [number, number, number]
+  scale?: [number, number, number]
+}
+
 interface ViewportProps {
   objects: SceneObject[]
   selectedId: string
+  transformMode?: 'translate' | 'rotate' | 'scale'
   onSelect: (objectId: string) => void
-  onTransformChange?: (objectId: string, position: [number, number, number]) => void
+  onTransformChange?: (objectId: string, transform: TransformUpdate) => void
 }
 
 // Error boundary to catch any GLTF or rendering failure inside Three.js
@@ -33,6 +40,7 @@ class ViewportErrorBoundary extends Component<
 export function Viewport({
   objects,
   selectedId,
+  transformMode = 'translate',
   onSelect,
   onTransformChange,
 }: ViewportProps) {
@@ -131,6 +139,7 @@ export function Viewport({
                   key={object.id}
                   object={object}
                   selected={selectedId === object.id}
+                  transformMode={transformMode}
                   onSelect={onSelect}
                   onTransformChange={onTransformChange}
                 />
@@ -166,11 +175,12 @@ function ModelLoadingFallback() {
 interface ModelPartProps {
   object: SceneObject
   selected: boolean
+  transformMode?: 'translate' | 'rotate' | 'scale'
   onSelect: (id: string) => void
-  onTransformChange?: (id: string, position: [number, number, number]) => void
+  onTransformChange?: (id: string, transform: TransformUpdate) => void
 }
 
-function ModelPart({ object, selected, onSelect, onTransformChange }: ModelPartProps) {
+function ModelPart({ object, selected, transformMode = 'translate', onSelect, onTransformChange }: ModelPartProps) {
   const ref = useRef<Object3D>(null)
   const scaleMod = selected ? 1.03 : 1.0
   const scaledScale = object.scale.map((v) => v * scaleMod) as [number, number, number]
@@ -197,12 +207,18 @@ function ModelPart({ object, selected, onSelect, onTransformChange }: ModelPartP
       {selected && (
         <TransformControls
           object={ref as React.RefObject<Object3D>}
-          mode="translate"
+          mode={transformMode}
           size={0.6}
           onMouseUp={() => {
             if (ref.current && onTransformChange) {
               const p = ref.current.position
-              onTransformChange(object.id, [p.x, p.y, p.z])
+              const r = ref.current.rotation
+              const s = ref.current.scale
+              onTransformChange(object.id, {
+                position: [Number(p.x.toFixed(4)), Number(p.y.toFixed(4)), Number(p.z.toFixed(4))],
+                rotation: [Number(r.x.toFixed(4)), Number(r.y.toFixed(4)), Number(r.z.toFixed(4))],
+                scale: [Number(s.x.toFixed(4)), Number(s.y.toFixed(4)), Number(s.z.toFixed(4))],
+              })
             }
           }}
         />

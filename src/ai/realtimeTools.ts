@@ -1,5 +1,10 @@
-import { applySceneTool, createInitialScene, getSceneContext, resolveObjectId } from '../scene/sceneTools'
-import type { SceneState, ToolDefinition, ToolResult } from '../types/scene'
+import {
+  executeSceneCommand,
+  getSceneContext,
+  resolveObjectId,
+  resolveTargetObjects,
+} from '../scene/sceneTools'
+import type { SceneContext, SceneState, ToolDefinition, ToolResult } from '../types/scene'
 
 export const toolCatalog: ToolDefinition[] = [
   {
@@ -20,6 +25,10 @@ export const toolCatalog: ToolDefinition[] = [
         objectId: { type: 'string' },
         name: { type: 'string' },
         type: { type: 'string' },
+        position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+        rotation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+        scale: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+        parentId: { type: 'string' },
       },
       required: ['objectId', 'name', 'type'],
     },
@@ -34,6 +43,15 @@ export const toolCatalog: ToolDefinition[] = [
     },
   },
   {
+    name: 'removeObjects',
+    description: 'Remove multiple objects from the scene simultaneously.',
+    parameters: {
+      type: 'object',
+      properties: { objectIds: { type: 'array', items: { type: 'string' } } },
+      required: ['objectIds'],
+    },
+  },
+  {
     name: 'hideObject',
     description: 'Hide an existing object.',
     parameters: {
@@ -43,12 +61,30 @@ export const toolCatalog: ToolDefinition[] = [
     },
   },
   {
+    name: 'hideObjects',
+    description: 'Hide multiple objects simultaneously.',
+    parameters: {
+      type: 'object',
+      properties: { objectIds: { type: 'array', items: { type: 'string' } } },
+      required: ['objectIds'],
+    },
+  },
+  {
     name: 'showObject',
     description: 'Show a hidden object.',
     parameters: {
       type: 'object',
       properties: { objectId: { type: 'string' } },
       required: ['objectId'],
+    },
+  },
+  {
+    name: 'showObjects',
+    description: 'Show multiple hidden objects simultaneously.',
+    parameters: {
+      type: 'object',
+      properties: { objectIds: { type: 'array', items: { type: 'string' } } },
+      required: ['objectIds'],
     },
   },
   {
@@ -108,7 +144,7 @@ export const toolCatalog: ToolDefinition[] = [
   },
   {
     name: 'getSceneState',
-    description: 'Return the current scene state for the assistant.',
+    description: 'Return the current concise scene state for the assistant.',
     parameters: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -118,37 +154,20 @@ export const toolCatalog: ToolDefinition[] = [
   },
 ]
 
-export function getSceneToolContext(scene: SceneState): { scene: string; objects: Array<{ id: string; name: string; type: string; visible: boolean }> } {
+export function getSceneToolContext(scene: SceneState): SceneContext {
   return getSceneContext(scene)
 }
 
-function describeTargetObject(text: string, scene: SceneState): string | null {
-  const normalized = text.replace(/[^a-z0-9]+/g, ' ').toLowerCase().trim()
-
-  for (const object of scene.objects) {
-    const aliases = [
-      object.id,
-      object.name,
-      object.type,
-      ...[
-        object.id.replace(/-/g, ' '),
-        object.name.toLowerCase(),
-      ],
-    ]
-
-    if (aliases.some((alias) => normalized.includes(alias.toLowerCase()))) {
-      return object.id
-    }
-
-    if (object.id === 'rear-wheel' && /rear|back|behind/.test(normalized)) {
-      return 'rear-wheel'
-    }
-
-    if (object.id === 'front-wheel' && /front|front wheel|front tyre|front tire/.test(normalized)) {
-      return 'front-wheel'
+function extractTargetQuery(text: string, actionKeywords: string[]): string {
+  let cleaned = text.trim()
+  for (const keyword of actionKeywords) {
+    const regex = new RegExp(`^.*?\\b${keyword}\\b\\s*`, 'i')
+    if (regex.test(cleaned)) {
+      cleaned = cleaned.replace(regex, '')
+      break
     }
   }
-  return null
+  return cleaned.replace(/^(the|both|all|a|an)\s+/i, (match) => match)
 }
 
 export function parseTextCommand(text: string, scene: SceneState): { scene: SceneState; result: ToolResult } {
@@ -161,65 +180,113 @@ export function parseTextCommand(text: string, scene: SceneState): { scene: Scen
     }
   }
 
+  // 1. Undo / Revert (supports single word "undo" as well as "undo that", "revert", etc.)
+  if (/^(undo|revert)(\s+(that|last|scene|action))?$/.test(normalized) || /(undo|revert).*(that|last|scene)/.test(normalized)) {
+    return executeSceneCommand(scene, { type: 'undoScene' })
+  }
+
+  // 2. Reset / Clear Workspace
+  if (/^(reset|clear)(\s+(scene|workspace|layout))?$/.test(normalized) || /(reset|clear).*(scene|workspace)/.test(normalized)) {
+    return executeSceneCommand(scene, { type: 'resetScene' })
+  }
+
+  // 3. Create initial mountain bike
   if (/(create|build).*(mountain bike|bike)/.test(normalized)) {
-    const reset = createInitialScene()
-    return {
-      scene: reset,
-      result: { success: true, action: 'createObject', objectId: 'frame', message: 'Mountain bike created.' },
+    return executeSceneCommand(scene, { type: 'resetScene' })
+  }
+
+  // 4. Add motor / engine
+  if (/(add|install|attach).*(engine|motor)/.test(normalized) || (/(engine|motor)/.test(normalized) && /(add|install)/.test(normalized))) {
+    const existing = scene.objects.find((entry) => entry.id === 'engine')
+    if (existing) {
+      return executeSceneCommand(scene, { type: 'selectObject', objectId: 'engine' })
     }
+    return executeSceneCommand(scene, {
+      type: 'createObject',
+      objectId: 'engine',
+      name: 'Engine',
+      objectType: 'engine',
+      position: [0.2, 0.8, 0],
+      rotation: [0, 0, 0],
+      scale: [0.9, 0.9, 0.9],
+      parentId: 'frame',
+    })
   }
 
-  if (/(undo|revert).*(that|last|scene)/.test(normalized)) {
-    return applySceneTool(scene, 'undoScene', {})
-  }
-
-  if (/(reset|clear).*(scene|workspace)/.test(normalized)) {
-    return applySceneTool(scene, 'resetScene', {})
-  }
-
-  if (/(add|install).*(engine|motor)/.test(normalized) || /(engine|motor)/.test(normalized) && /(add|install)/.test(normalized)) {
-    return applySceneTool(scene, 'addMotor', {})
-  }
-
+  // 5. Scale motor / engine
   if (/(make|scale|bigger|larger|smaller|reduce).*(engine|motor)/.test(normalized)) {
     const engineId = resolveObjectId('engine', scene) ?? 'engine'
     const isLarger = /(bigger|larger|scale up|up)/.test(normalized)
-    const scale = isLarger ? [1.2, 1.2, 1.2] : [0.72, 0.72, 0.72]
-    return applySceneTool(scene, 'scaleObject', { objectId: engineId, scale })
+    const scale: [number, number, number] = isLarger ? [1.2, 1.2, 1.2] : [0.72, 0.72, 0.72]
+    return executeSceneCommand(scene, { type: 'scaleObject', objectId: engineId, scale })
   }
 
+  // 6. Move motor / engine
   if (/(move|put|shift).*(engine|motor).*(forward|front|ahead|higher|up)/.test(normalized)) {
     const engineId = resolveObjectId('engine', scene) ?? 'engine'
-    const nextPosition = [0.8, 1.1, 0]
-    const targetObject = scene.objects.find((entry: { id: string }) => entry.id === engineId)
-    if (targetObject) {
-      return applySceneTool(scene, 'moveObject', { objectId: engineId, position: nextPosition })
-    }
+    return executeSceneCommand(scene, { type: 'moveObject', objectId: engineId, position: [0.8, 1.1, 0] })
   }
 
-  if (/(remove|delete|take off|takeoff|hide).*(wheel|tyre|tire|rear|front|back)/.test(normalized)) {
-    const targetId = describeTargetObject(normalized, scene)
-    if (targetId) {
-      return applySceneTool(scene, 'removeObject', { objectId: targetId })
+  // 7. Scale frame / bike
+  if (/(make it|make the bike|scale|bigger|larger|smaller).*(bike|frame)/.test(normalized)) {
+    return executeSceneCommand(scene, { type: 'scaleObject', objectId: 'frame', scale: [1.18, 1.18, 1.18] })
+  }
+
+  // 8. Remove / Delete / Detach objects (handles "remove both tyres", "delete rear wheel", "remove wheels")
+  if (/(remove|delete|take off|takeoff|detach|eliminate)\b/.test(normalized)) {
+    const query = extractTargetQuery(normalized, ['remove', 'delete', 'take off', 'takeoff', 'detach', 'eliminate'])
+    const targets = resolveTargetObjects(query || normalized, scene)
+
+    if (targets.length === 1 && targets[0]) {
+      return executeSceneCommand(scene, { type: 'removeObject', objectId: targets[0] })
+    }
+    if (targets.length > 1) {
+      return executeSceneCommand(scene, { type: 'removeObjects', objectIds: targets })
     }
     return {
       scene,
-      result: { success: false, action: 'removeObject', error: 'I could not identify which wheel or tyre to remove.' },
+      result: { success: false, action: 'removeObject', error: 'I could not identify which object(s) to remove.' },
     }
   }
 
-  if (/(remove|delete|take off|takeoff|hide).*(engine|motor)/.test(normalized)) {
-    const targetId = resolveObjectId('engine', scene) ?? 'engine'
-    return applySceneTool(scene, 'removeObject', { objectId: targetId })
+  // 9. Hide / Conceal objects (handles "hide both tyres", "hide front wheel")
+  if (/(hide|conceal|invisible)\b/.test(normalized)) {
+    const query = extractTargetQuery(normalized, ['hide', 'conceal', 'make invisible'])
+    const targets = resolveTargetObjects(query || normalized, scene)
+
+    if (targets.length === 1 && targets[0]) {
+      return executeSceneCommand(scene, { type: 'hideObject', objectId: targets[0] })
+    }
+    if (targets.length > 1) {
+      return executeSceneCommand(scene, { type: 'hideObjects', objectIds: targets })
+    }
+    return {
+      scene,
+      result: { success: false, action: 'hideObject', error: 'I could not identify which object(s) to hide.' },
+    }
   }
 
-  if (/(make it|make the bike|scale|bigger|larger|smaller).*(bike|frame)/.test(normalized)) {
-    return applySceneTool(scene, 'scaleObject', { objectId: 'frame', scale: [1.18, 1.18, 1.18] })
+  // 10. Show / Unhide / Reveal objects (handles "show both tyres", "unhide rear wheel")
+  if (/(show|unhide|reveal|display|make visible)\b/.test(normalized)) {
+    const query = extractTargetQuery(normalized, ['show', 'unhide', 'reveal', 'display', 'make visible'])
+    const targets = resolveTargetObjects(query || normalized, scene)
+
+    if (targets.length === 1 && targets[0]) {
+      return executeSceneCommand(scene, { type: 'showObject', objectId: targets[0] })
+    }
+    if (targets.length > 1) {
+      return executeSceneCommand(scene, { type: 'showObjects', objectIds: targets })
+    }
+    return {
+      scene,
+      result: { success: false, action: 'showObject', error: 'I could not identify which object(s) to show.' },
+    }
   }
 
-  const targetId = describeTargetObject(normalized, scene)
-  if (targetId) {
-    return applySceneTool(scene, 'selectObject', { objectId: targetId })
+  // 11. Select object (e.g. "select rear wheel", "front tyre")
+  const targets = resolveTargetObjects(normalized, scene)
+  if (targets.length > 0 && targets[0]) {
+    return executeSceneCommand(scene, { type: 'selectObject', objectId: targets[0] })
   }
 
   return {
