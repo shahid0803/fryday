@@ -355,6 +355,19 @@ export function cloneSceneObjects(objects: SceneObject[]): SceneObject[] {
   }))
 }
 
+function cloneSceneState(scene: SceneState): SceneState {
+  return {
+    scene: scene.scene,
+    selectedId: scene.selectedId,
+    objects: cloneSceneObjects(scene.objects),
+    history: scene.history.map((snapshot) => ({
+      scene: snapshot.scene,
+      selectedId: snapshot.selectedId,
+      objects: cloneSceneObjects(snapshot.objects),
+    })),
+  }
+}
+
 export function pushSceneHistory(scene: SceneState): void {
   scene.history = [
     {
@@ -460,6 +473,7 @@ export function executeSceneCommand(
   scene: SceneState,
   command: SceneCommand
 ): { scene: SceneState; result: ToolResult } {
+  scene = cloneSceneState(scene)
   switch (command.type) {
     case 'selectObject': {
       const resolvedId = resolveObjectId(command.objectId, scene) ?? command.objectId
@@ -746,9 +760,16 @@ export function executeSceneCommand(
 
     case 'insertGeneratedAsset': {
       const asset = command.asset
+      const baseId = normalizeText(asset.id).replace(/\s+/g, '-') || 'generated-asset'
+      let objectId = baseId
+      let suffix = 2
+      while (scene.objects.some((object) => object.id === objectId)) {
+        objectId = `${baseId}-${suffix}`
+        suffix += 1
+      }
       pushSceneHistory(scene)
       const newObject: SceneObject = {
-        id: asset.id,
+        id: objectId,
         name: asset.name,
         type: 'generated-model',
         visible: true,
@@ -760,16 +781,17 @@ export function executeSceneCommand(
         generated: true,
       }
       scene.objects = [...scene.objects, newObject]
-      scene.selectedId = asset.id
+      scene.selectedId = objectId
       return {
         scene,
-        result: { success: true, action: 'insertGeneratedAsset', objectId: asset.id, message: `${asset.name} added to scene.` },
+        result: { success: true, action: 'insertGeneratedAsset', objectId, message: `${asset.name} added to scene.` },
       }
     }
 
     case 'resetScene': {
       pushSceneHistory(scene)
       const fresh = createInitialScene()
+      fresh.history = scene.history
       return {
         scene: fresh,
         result: { success: true, action: 'resetScene', message: 'Scene reset to default mountain bike layout.' },

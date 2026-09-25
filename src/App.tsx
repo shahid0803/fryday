@@ -110,7 +110,7 @@ export default function App() {
 
   const handleCommandSend = async (text: string) => {
     if (!clientRef.current || !text.trim()) return
-    await clientRef.current.sendText(text.trim(), scene, setScene)
+    await clientRef.current.sendText(text.trim(), (updater) => setScene(updater))
   }
 
   const handleToggleVoice = async () => {

@@ -25,7 +25,11 @@ function normalizeTask(task: MeshyTask): TextTo3DTask {
 }
 
 export class MeshyProvider implements TextTo3DProvider {
-  constructor(private readonly apiKey: string) {}
+  private readonly apiKey: string
+
+  constructor(apiKey: string) {
+    this.apiKey = apiKey
+  }
 
   async createTask(input: TextTo3DRequest): Promise<TextTo3DTask> {
     const mode = input.mode ?? 'preview'
@@ -67,7 +71,7 @@ export class MeshyProvider implements TextTo3DProvider {
         ...init.headers,
       },
     })
-    const payload = await response.json().catch(() => null)
+    const payload = (await response.json().catch(() => null)) as { message?: string; error?: { message?: string } } | null
     if (!response.ok) {
       const message = payload?.message ?? payload?.error?.message ?? 'Meshy request failed.'
       throw new Error(message)

@@ -95,7 +95,7 @@ export class RealtimeAIClient {
     }
   }
 
-  async sendText(text: string, scene: SceneState, updateScene: (nextScene: SceneState) => void): Promise<void> {
+  async sendText(text: string, updateScene: (updater: (scene: SceneState) => SceneState) => void): Promise<void> {
     this.addUserMessage(text)
     this.setStatus('THINKING')
 
@@ -108,19 +108,22 @@ export class RealtimeAIClient {
           this.onGenerationChange?.(state)
           this.setStatus(state.status === 'GENERATING' ? 'EXECUTING' : 'CONNECTED')
         })
-        const result = executeSceneCommand(scene, {
-          type: 'insertGeneratedAsset',
-          asset: {
-            id: asset.id,
-            name: asset.name,
-            modelUrl: asset.modelUrl,
-            thumbnailUrl: asset.thumbnailUrl,
-            position: [0, 0.8, 0],
-            scale: [1, 1, 1],
-          },
+        let nextScene: SceneState | undefined
+        updateScene((current) => {
+          nextScene = executeSceneCommand(current, {
+            type: 'insertGeneratedAsset',
+            asset: {
+              id: asset.id,
+              name: asset.name,
+              modelUrl: asset.modelUrl,
+              thumbnailUrl: asset.thumbnailUrl,
+              position: [0, 0.8, 0],
+              scale: [1, 1, 1],
+            },
+          }).scene
+          return nextScene
         })
-        updateScene(result.scene)
-        this.onSceneChange?.(result.scene)
+        if (nextScene) this.onSceneChange?.(nextScene)
         this.addAssistantMessage(`${asset.name} is ready and added to the scene.`)
       } catch (error) {
         this.setStatus('ERROR')
@@ -130,18 +133,21 @@ export class RealtimeAIClient {
       return
     }
 
-    const result = parseTextCommand(text, scene)
+    let result: ReturnType<typeof parseTextCommand> | undefined
+    updateScene((current) => {
+      result = parseTextCommand(text, current)
+      return result.scene
+    })
     this.setStatus('EXECUTING')
 
-    if (!result.result.success) {
+    if (!result || !result.result.success) {
       this.setStatus('ERROR')
-      const message = result.result.error ?? 'Unsupported command.'
+      const message = result?.result.error ?? 'Unsupported command.'
       this.addAssistantMessage(message)
       this.setStatus('CONNECTED')
       return
     }
 
-    updateScene(result.scene)
     this.onSceneChange?.(result.scene)
     const responseText = result.result.message ?? 'Command executed.'
     this.addAssistantMessage(responseText)
