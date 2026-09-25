@@ -10,7 +10,15 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# Environment and secrets
+.env
+.env.*
+!.env.example
 *.local
+
+# 3D assets and binary models
+*.glb
+*.gltf
 
 # Editor directories and files
 .vscode/*

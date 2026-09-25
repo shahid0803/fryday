@@ -1,29 +1,42 @@
-import { Canvas } from '@react-three/fiber'
-import { Grid, Line, OrbitControls, TransformControls, useGLTF } from '@react-three/drei'
-import { ArrowUpRight, BellDot, Command, Cpu, Eye, EyeOff, Gauge, Layers3, Move3d, Settings, Sparkles } from 'lucide-react'
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import * as THREE from 'three'
-import type { Object3D } from 'three'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { RealtimeAIClient } from './ai/realtimeClient'
-import { AssistantPanel } from './components/AssistantPanel'
-import { VoiceButton } from './components/VoiceButton'
-import { applySceneTool, createInitialScene } from './scene/sceneTools'
-import type { ConnectionState, GenerationState, TranscriptMessage } from './types/scene'
+import { AssistantFeed } from './components/AssistantFeed'
+import { CinematicIntro } from './components/CinematicIntro'
+import { CommandBar } from './components/CommandBar'
+import { GenerationProgress } from './components/GenerationProgress'
+import { SceneHierarchy } from './components/SceneHierarchy'
+import { TelemetryOverlay } from './components/TelemetryOverlay'
+import { TopBar } from './components/TopBar'
+import { Viewport } from './components/Viewport'
+import type { TransformUpdate } from './components/Viewport'
+import { createInitialScene, executeSceneCommand } from './scene/sceneTools'
+import type { ConnectionState, GenerationState, SceneState, TranscriptMessage } from './types/scene'
 import './App.css'
 
-const APP_NAME = 'NOVA'
-
-function App() {
-  const [scene, setScene] = useState(() => createInitialScene())
+export default function App() {
+  const [scene, setScene] = useState<SceneState>(() => createInitialScene())
   const [status, setStatus] = useState<ConnectionState>('OFFLINE')
   const [generation, setGeneration] = useState<GenerationState>({ status: 'IDLE', progress: 0 })
-  const [draft, setDraft] = useState('Remove the rear wheel.')
+  const [activeTab, setActiveTab] = useState<string>('WORKSPACE')
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true)
+  const [rightPanelOpen, setRightPanelOpen] = useState(true)
+  const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('translate')
+
+  // Cinematic intro: bypass if previously seen in this browser
+  const [showIntro, setShowIntro] = useState(() => {
+    try {
+      return !localStorage.getItem('fryday_intro_seen')
+    } catch {
+      return true
+    }
+  })
+
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([
     {
-      id: 'assistant-init',
+      id: 'sys-welcome',
       role: 'assistant',
-      text: 'Local AI ready. I can help refine the bike geometry.',
+      text: 'FRYDAY Neural Laboratory active. Geometric scene context loaded.',
       status: 'final',
     },
   ])
@@ -39,424 +52,154 @@ function App() {
     void client.connect()
     clientRef.current = client
 
+    // Keyboard shortcuts for transform mode (W, E, R)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeElement = document.activeElement
+      const isInput = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement
+      if (isInput) return
+
+      if (e.key === 'w' || e.key === 'W') setTransformMode('translate')
+      if (e.key === 'e' || e.key === 'E') setTransformMode('rotate')
+      if (e.key === 'r' || e.key === 'R') setTransformMode('scale')
+    }
+    window.addEventListener('keydown', handleKeyDown)
+
     return () => {
       client.stopListening()
+      window.removeEventListener('keydown', handleKeyDown)
     }
   }, [])
 
-  const handleVoiceToggle = async () => {
-    if (!clientRef.current) return
+  const handleIntroComplete = () => {
+    setShowIntro(false)
+    try {
+      localStorage.setItem('fryday_intro_seen', 'true')
+    } catch {
+      // Ignore localStorage exceptions in private browsing
+    }
+  }
 
+  const handleReplayIntro = () => {
+    setShowIntro(true)
+  }
+
+  // Unified Command Bus dispatches:
+  const handleSelectObject = (objectId: string) => {
+    const outcome = executeSceneCommand(scene, { type: 'selectObject', objectId })
+    setScene(outcome.scene)
+  }
+
+  const handleToggleVisibility = (objectId: string, currentVisible: boolean) => {
+    const outcome = executeSceneCommand(scene, {
+      type: currentVisible ? 'hideObject' : 'showObject',
+      objectId,
+    })
+    setScene(outcome.scene)
+  }
+
+  const handleTransformChange = (objectId: string, transform: TransformUpdate) => {
+    const outcome = executeSceneCommand(scene, {
+      type: 'setTransform',
+      objectId,
+      position: transform.position,
+      rotation: transform.rotation,
+      scale: transform.scale,
+    })
+    setScene(outcome.scene)
+  }
+
+  const handleCommandSend = async (text: string) => {
+    if (!clientRef.current || !text.trim()) return
+    await clientRef.current.sendText(text.trim(), (updater) => setScene(updater))
+  }
+
+  const handleToggleVoice = async () => {
+    if (!clientRef.current) return
     if (status === 'LISTENING') {
       clientRef.current.stopListening()
       return
     }
-
     await clientRef.current.startListening()
   }
 
-  const handleCommandExecute = async () => {
-    if (!clientRef.current || !draft.trim()) return
-    await clientRef.current.sendText(draft.trim(), (updater) => setScene(updater))
-  }
-
-  const visibleObjects = useMemo(() => scene.objects.filter((object) => object.visible), [scene])
+  const selectedObject = useMemo(() => {
+    return scene.objects.find((obj) => obj.id === scene.selectedId)
+  }, [scene.objects, scene.selectedId])
 
   return (
-    <div className="app-shell">
-      <div className="grain-overlay" aria-hidden="true" />
+    <div className="fryday-shell">
+      {/* Cinematic Prologue Sequence */}
+      {showIntro && <CinematicIntro onComplete={handleIntroComplete} />}
 
-      <header className="topbar panel-surface">
-        <div className="brand-block">
-          <div className="brand-mark">N</div>
-          <div className="brand-copy">
-            <div className="brand-wordmark">{APP_NAME}</div>
-            <div className="system-status">
-              <span className="status-dot" />
-              {status === 'ERROR' ? 'REALTIME ERROR' : 'REALTIME ONLINE'}
-            </div>
-          </div>
-        </div>
+      {/* Atmospheric Glow & Grain Overlays */}
+      <div className="fryday-glow-overlay" aria-hidden="true" />
+      <div className="fryday-grain" aria-hidden="true" />
 
-        <nav className="main-nav" aria-label="Main navigation">
-          <button type="button" className="nav-link active">WORKSPACE</button>
-          <button type="button" className="nav-link">PROJECTS</button>
-          <button type="button" className="nav-link">ASSETS</button>
-          <button type="button" className="nav-link">HISTORY</button>
-        </nav>
+      {/* Minimal Top Bar */}
+      <TopBar
+        status={status}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        leftPanelOpen={leftPanelOpen}
+        setLeftPanelOpen={setLeftPanelOpen}
+        rightPanelOpen={rightPanelOpen}
+        setRightPanelOpen={setRightPanelOpen}
+        onReplayIntro={handleReplayIntro}
+      />
 
-        <button type="button" className="settings-button" aria-label="Settings">
-          <Settings size={14} />
-        </button>
-      </header>
-
-      <div className="main-grid">
-        <aside className="scene-panel panel-surface">
-          <div className="panel-header-row">
-            <span className="panel-label">SCENE</span>
-            <button type="button" className="header-action">
-              <BellDot size={12} />
-            </button>
-          </div>
-
-          <div className="scene-tree">
-            {visibleObjects.map((object) => (
-              <SceneNodeRow
-                key={object.id}
-                object={object}
-                selected={scene.selectedId === object.id}
-                onSelect={(objectId) => {
-                  setScene((current) => ({ ...current, selectedId: objectId }))
-                }}
-              />
-            ))}
-          </div>
-        </aside>
-
-        <main className="viewport-panel panel-surface">
-          <div className="viewport-toolbar">
-            <div className="toolbar-group">
-              <span className="toolbar-tag">AERIAL</span>
-              <span className="toolbar-tag muted">ISOMETRIC</span>
-            </div>
-            <div className="toolbar-group compact">
-              <button type="button" className="ghost-chip">
-                <Sparkles size={12} />
-                LIVE
-              </button>
-              <button type="button" className="ghost-chip emphasis">
-                <ArrowUpRight size={12} />
-                EXPORT
-              </button>
-            </div>
-          </div>
-
-          <div className="viewport-shell">
-            <SceneViewport
-              scene={scene}
-              selectedObject={scene.selectedId}
-              onSelect={(objectId) => setScene((current) => ({ ...current, selectedId: objectId }))}
-              onTransform={(objectId, transform) => {
-                setScene((current) => {
-                  return applySceneTool(current, 'transformObject', { objectId, ...transform }).scene
-                })
-              }}
-            />
-            <div className="viewport-overlay">
-              <div className="viewport-status">
-                <span className="status-dot" />
-                {status === 'LISTENING' ? 'LISTENING' : 'SCENE STABLE'}
-              </div>
-              <div className="viewport-pill">SELECTED: {scene.selectedId.toUpperCase()}</div>
-            </div>
-            {generation.status === 'GENERATING' && (
-              <div className="generation-overlay">
-                <Sparkles size={14} />
-                <div>
-                  <strong>GENERATING 3D MODEL</strong>
-                  <span>{generation.prompt ?? 'Preparing asset'} · {generation.progress}%</span>
-                </div>
-                <div className="generation-progress"><span style={{ width: `${generation.progress}%` }} /></div>
-              </div>
-            )}
-          </div>
-        </main>
-
-        <aside className="assistant-panel">
-          <AssistantPanel transcript={transcript} />
-        </aside>
-      </div>
-
-      <footer className="command-bar panel-surface">
-        <VoiceButton status={status} onToggle={handleVoiceToggle} />
-
-        <div className="command-prompt" aria-label="Command input">
-          <Command size={14} />
-          <input
-            type="text"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                void handleCommandExecute()
-              }
-            }}
-            aria-label="Command text"
+      {/* Main Laboratory Workspace */}
+      <div className="workspace-grid">
+        {/* Left Scene Hierarchy Panel */}
+        <div className={`left-panel-drawer ${leftPanelOpen ? 'open' : ''} md:relative md:block`}>
+          <SceneHierarchy
+            sceneName={scene.scene}
+            objects={scene.objects}
+            selectedId={scene.selectedId}
+            onSelect={handleSelectObject}
+            onToggleVisibility={handleToggleVisibility}
           />
         </div>
 
-        <button type="button" className="execute-button" onClick={() => void handleCommandExecute()}>
-          EXECUTE
-        </button>
-      </footer>
-    </div>
-  )
-}
+        {/* Center 3D Viewport — The Centerpiece */}
+        <main className="relative w-full h-full min-h-0 overflow-hidden" aria-label="3D Canvas Viewport">
+          <Viewport
+            objects={scene.objects}
+            selectedId={scene.selectedId}
+            transformMode={transformMode}
+            onSelect={handleSelectObject}
+            onTransformChange={handleTransformChange}
+          />
 
-function SceneNodeRow({
-  object,
-  selected,
-  onSelect,
-}: {
-  object: { id: string; name: string; visible: boolean }
-  selected: boolean
-  onSelect: (objectId: string) => void
-}) {
-  return (
-    <div className="scene-branch">
-      <button type="button" className={`scene-node ${selected ? 'selected' : ''}`} onClick={() => onSelect(object.id)}>
-        <span className="scene-node-icon">
-          {renderObjectIcon(object.id)}
-        </span>
-        <span className="scene-node-label">{object.name}</span>
-        <span className="scene-node-visibility">{object.visible ? <Eye size={10} /> : <EyeOff size={10} />}</span>
-      </button>
-    </div>
-  )
-}
+          {/* Viewport Telemetry HUD */}
+          <TelemetryOverlay
+            selectedObject={selectedObject}
+            totalObjects={scene.objects.length}
+            transformMode={transformMode}
+            onSetTransformMode={setTransformMode}
+          />
 
-function renderObjectIcon(objectId: string) {
-  switch (objectId) {
-    case 'frame':
-      return <Layers3 size={12} />
-    case 'front-wheel':
-    case 'rear-wheel':
-      return <Move3d size={12} />
-    case 'handlebar':
-      return <Sparkles size={12} />
-    case 'seat':
-    case 'pedals':
-      return <Gauge size={12} />
-    case 'chain':
-    case 'engine':
-      return <Cpu size={12} />
-    default:
-      return <Layers3 size={12} />
-  }
-}
+          {/* 3D Generation Progress Overlay */}
+          <GenerationProgress generation={generation} />
 
-function SceneViewport({
-  scene,
-  selectedObject,
-  onSelect,
-  onTransform,
-}: {
-  scene: ReturnType<typeof createInitialScene>
-  selectedObject: string
-  onSelect: (objectId: string) => void
-  onTransform: (objectId: string, transform: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }) => void
-}) {
-  return (
-    <Canvas camera={{ position: [6, 4.5, 7], fov: 38 }} shadows dpr={[1, 1.8]} className="viewport-canvas">
-      <color attach="background" args={['#070d12']} />
-      <fog attach="fog" args={['#070d12', 9, 22]} />
-      <ambientLight intensity={0.8} />
-      <directionalLight castShadow position={[7, 8, 5]} intensity={1.9} shadow-mapSize-width={1024} shadow-mapSize-height={1024} />
-      <pointLight position={[-5, 2.5, -4]} color="#7ae7ff" intensity={18} distance={30} />
-      <pointLight position={[4, 3, 5]} color="#8be7bd" intensity={12} distance={24} />
-
-      <group rotation={[0, 0.7, 0]} position={[0, -0.8, 0]}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.65, 0]} receiveShadow>
-          <circleGeometry args={[6, 80]} />
-          <meshStandardMaterial color="#061014" roughness={0.9} metalness={0.15} />
-        </mesh>
-
-        <Grid args={[12, 12]} cellColor="#18363d" sectionColor="#79f1ff" cellThickness={0.5} sectionThickness={1.1} fadeDistance={26} fadeStrength={1.1} infiniteGrid={false} position={[0, -0.63, 0]} />
-
-        <Line points={[[-4, 0.9, -2.5], [-2.2, 1.9, -1.5], [0, 1.6, 0], [2.4, 2.1, 1.2], [4.2, 1.3, 2.2]]} color="#79f1ff" lineWidth={0.8} transparent opacity={0.55} />
-
-        {scene.objects
-          .filter((object) => object.visible)
-          .map((object) => (
-            <ModelPart
-              key={object.id}
-              object={object}
-              selected={selectedObject === object.id}
-              onSelect={onSelect}
-              onTransform={onTransform}
+          {/* Floating Command Bar at Bottom of Viewport */}
+          <div className="command-dock">
+            <CommandBar
+              status={status}
+              onSend={handleCommandSend}
+              onToggleVoice={handleToggleVoice}
+              isExecuting={status === 'EXECUTING' || status === 'THINKING'}
             />
-          ))}
-      </group>
+          </div>
+        </main>
 
-      <OrbitControls enablePan enableZoom enableRotate minDistance={4} maxDistance={12} maxPolarAngle={Math.PI / 2.2} />
-    </Canvas>
+        {/* Right AI Assistant Panel */}
+        <div className={`right-panel-drawer ${rightPanelOpen ? 'open' : ''} md:relative md:block`}>
+          <AssistantFeed
+            transcript={transcript}
+            status={status}
+          />
+        </div>
+      </div>
+    </div>
   )
 }
-
-function ModelPart({
-  object,
-  selected,
-  onSelect,
-  onTransform,
-}: {
-  object: ReturnType<typeof createInitialScene>['objects'][number]
-  selected: boolean
-  onSelect: (value: string) => void
-  onTransform: (objectId: string, transform: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }) => void
-}) {
-  const ref = useRef<Object3D>(null)
-
-  return (
-    <>
-      <group
-        ref={ref}
-        position={object.position}
-        rotation={object.rotation}
-        scale={object.scale}
-        onClick={(event) => {
-          event.stopPropagation()
-          onSelect(object.id)
-        }}
-      >
-        {object.assetUrl ? <GeneratedModelBoundary url={object.assetUrl} /> : renderObjectMesh(object)}
-      </group>
-      {selected && (
-        <TransformControls
-          object={ref as React.RefObject<Object3D>}
-          mode="translate"
-          size={0.7}
-          onMouseUp={() => {
-            if (!ref.current) return
-            onTransform(object.id, {
-              position: [ref.current.position.x, ref.current.position.y, ref.current.position.z],
-              rotation: [ref.current.rotation.x, ref.current.rotation.y, ref.current.rotation.z],
-              scale: [ref.current.scale.x, ref.current.scale.y, ref.current.scale.z],
-            })
-          }}
-        />
-      )}
-    </>
-  )
-}
-
-function GeneratedModel({ url }: { url: string }) {
-  const { scene } = useGLTF(url)
-  const model = useMemo(() => {
-    const clone = scene.clone(true)
-    const box = new THREE.Box3().setFromObject(clone)
-    const size = box.getSize(new THREE.Vector3())
-    const maxDimension = Math.max(size.x, size.y, size.z, 0.001)
-    const factor = 2.5 / maxDimension
-    clone.scale.setScalar(factor)
-    const center = box.getCenter(new THREE.Vector3())
-    clone.position.set(-center.x * factor, -center.y * factor, -center.z * factor)
-    return clone
-  }, [scene])
-  return <primitive object={model} />
-}
-
-class GeneratedModelBoundary extends Component<{ url: string; children?: ReactNode }, { failed: boolean }> {
-  state = { failed: false }
-
-  static getDerivedStateFromError() {
-    return { failed: true }
-  }
-
-  render() {
-    if (this.state.failed) return null
-    return <GeneratedModel url={this.props.url} />
-  }
-}
-
-function renderObjectMesh(object: ReturnType<typeof createInitialScene>['objects'][number]) {
-  switch (object.id) {
-    case 'frame':
-      return (
-        <>
-          <mesh castShadow position={[0, 0.28, 0]}>
-            <boxGeometry args={[2.8, 0.16, 0.5]} />
-            <meshStandardMaterial color="#d9f3fb" emissive="#74f0ff" emissiveIntensity={0.35} metalness={0.8} roughness={0.25} />
-          </mesh>
-          <mesh castShadow position={[0.55, 1, 0]} rotation={[0, 0, -0.58]}>
-            <boxGeometry args={[1.8, 0.14, 0.44]} />
-            <meshStandardMaterial color="#d9f3fb" emissive="#74f0ff" emissiveIntensity={0.25} metalness={0.8} roughness={0.25} />
-          </mesh>
-          <mesh castShadow position={[-0.7, 1.1, 0]} rotation={[0, 0, 0.6]}>
-            <boxGeometry args={[1.5, 0.15, 0.42]} />
-            <meshStandardMaterial color="#d9f3fb" emissive="#74f0ff" emissiveIntensity={0.25} metalness={0.8} roughness={0.25} />
-          </mesh>
-          <mesh castShadow position={[0, 0.7, 0]} rotation={[0, 0, Math.PI / 2]}>
-            <boxGeometry args={[0.8, 0.12, 0.34]} />
-            <meshStandardMaterial color="#d9f3fb" emissive="#74f0ff" emissiveIntensity={0.2} metalness={0.8} roughness={0.25} />
-          </mesh>
-        </>
-      )
-    case 'front-wheel':
-    case 'rear-wheel':
-      return (
-        <>
-          <mesh rotation={[Math.PI / 2, 0, 0]} castShadow>
-            <torusGeometry args={[0.78, 0.16, 24, 64]} />
-            <meshStandardMaterial color="#b7d8de" emissive="#75d6ff" emissiveIntensity={0.18} metalness={0.75} roughness={0.2} />
-          </mesh>
-          <mesh rotation={[Math.PI / 2, 0, 0]} castShadow>
-            <cylinderGeometry args={[0.04, 0.04, 0.18, 16]} />
-            <meshStandardMaterial color="#dff7ff" emissive="#8feaff" emissiveIntensity={0.4} metalness={0.8} roughness={0.2} />
-          </mesh>
-        </>
-      )
-    case 'handlebar':
-      return (
-        <>
-          <mesh castShadow>
-            <boxGeometry args={[0.9, 0.12, 0.08]} />
-            <meshStandardMaterial color="#d9f3fb" emissive="#74f0ff" emissiveIntensity={0.3} metalness={0.8} roughness={0.2} />
-          </mesh>
-          <mesh castShadow position={[0.38, 0.08, 0]}>
-            <boxGeometry args={[0.2, 0.5, 0.08]} />
-            <meshStandardMaterial color="#d9f3fb" emissive="#74f0ff" emissiveIntensity={0.2} metalness={0.8} roughness={0.2} />
-          </mesh>
-        </>
-      )
-    case 'seat':
-      return (
-        <>
-          <mesh castShadow position={[0, 0.08, 0]}>
-            <boxGeometry args={[0.72, 0.12, 0.38]} />
-            <meshStandardMaterial color="#b9e9ff" emissive="#67d8ff" emissiveIntensity={0.3} metalness={0.8} roughness={0.25} />
-          </mesh>
-          <mesh castShadow position={[0.05, -0.35, 0]}>
-            <boxGeometry args={[0.12, 0.7, 0.12]} />
-            <meshStandardMaterial color="#d7eff6" emissive="#74f0ff" emissiveIntensity={0.2} metalness={0.8} roughness={0.2} />
-          </mesh>
-        </>
-      )
-    case 'pedals':
-      return (
-        <>
-          <mesh rotation={[Math.PI / 2, 0, 0]} castShadow>
-            <cylinderGeometry args={[0.38, 0.38, 0.14, 24]} />
-            <meshStandardMaterial color="#d0f1ff" emissive="#74f0ff" emissiveIntensity={0.2} metalness={0.7} roughness={0.2} />
-          </mesh>
-          <mesh castShadow position={[0, 0.08, 0.22]}>
-            <boxGeometry args={[0.7, 0.06, 0.08]} />
-            <meshStandardMaterial color="#d0f1ff" emissive="#74f0ff" emissiveIntensity={0.2} metalness={0.7} roughness={0.2} />
-          </mesh>
-        </>
-      )
-    case 'chain':
-      return (
-        <mesh rotation={[Math.PI / 2, 0, 0]} castShadow>
-          <torusGeometry args={[0.46, 0.06, 12, 40]} />
-          <meshStandardMaterial color="#8de7ff" emissive="#5de5ff" emissiveIntensity={0.5} metalness={0.8} roughness={0.2} />
-        </mesh>
-      )
-    case 'engine':
-      return (
-        <>
-          <mesh castShadow position={[0, 0.5, 0]}>
-            <boxGeometry args={[0.75, 0.45, 0.45]} />
-            <meshStandardMaterial color="#dfeef4" emissive="#7ae7ff" emissiveIntensity={0.3} metalness={0.75} roughness={0.2} />
-          </mesh>
-          <mesh castShadow position={[0.6, 0.3, 0]}>
-            <cylinderGeometry args={[0.18, 0.18, 0.4, 24]} />
-            <meshStandardMaterial color="#dfeef4" emissive="#7ae7ff" emissiveIntensity={0.25} metalness={0.7} roughness={0.2} />
-          </mesh>
-        </>
-      )
-    default:
-      return null
-  }
-}
-
-export default App
