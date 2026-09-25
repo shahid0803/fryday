@@ -1,14 +1,14 @@
 import { Canvas } from '@react-three/fiber'
 import { Grid, Line, OrbitControls, TransformControls, useGLTF } from '@react-three/drei'
 import { ArrowUpRight, BellDot, Command, Cpu, Eye, EyeOff, Gauge, Layers3, Move3d, Settings, Sparkles } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import type { Object3D } from 'three'
 
 import { RealtimeAIClient } from './ai/realtimeClient'
 import { AssistantPanel } from './components/AssistantPanel'
 import { VoiceButton } from './components/VoiceButton'
-import { createInitialScene } from './scene/sceneTools'
+import { applySceneTool, createInitialScene } from './scene/sceneTools'
 import type { ConnectionState, GenerationState, TranscriptMessage } from './types/scene'
 import './App.css'
 
@@ -57,7 +57,7 @@ function App() {
 
   const handleCommandExecute = async () => {
     if (!clientRef.current || !draft.trim()) return
-    await clientRef.current.sendText(draft.trim(), scene, setScene)
+    await clientRef.current.sendText(draft.trim(), (updater) => setScene(updater))
   }
 
   const visibleObjects = useMemo(() => scene.objects.filter((object) => object.visible), [scene])
@@ -132,7 +132,16 @@ function App() {
           </div>
 
           <div className="viewport-shell">
-            <SceneViewport scene={scene} selectedObject={scene.selectedId} onSelect={(objectId) => setScene((current) => ({ ...current, selectedId: objectId }))} />
+            <SceneViewport
+              scene={scene}
+              selectedObject={scene.selectedId}
+              onSelect={(objectId) => setScene((current) => ({ ...current, selectedId: objectId }))}
+              onTransform={(objectId, transform) => {
+                setScene((current) => {
+                  return applySceneTool(current, 'transformObject', { objectId, ...transform }).scene
+                })
+              }}
+            />
             <div className="viewport-overlay">
               <div className="viewport-status">
                 <span className="status-dot" />
@@ -230,10 +239,12 @@ function SceneViewport({
   scene,
   selectedObject,
   onSelect,
+  onTransform,
 }: {
   scene: ReturnType<typeof createInitialScene>
   selectedObject: string
   onSelect: (objectId: string) => void
+  onTransform: (objectId: string, transform: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }) => void
 }) {
   return (
     <Canvas camera={{ position: [6, 4.5, 7], fov: 38 }} shadows dpr={[1, 1.8]} className="viewport-canvas">
@@ -262,6 +273,7 @@ function SceneViewport({
               object={object}
               selected={selectedObject === object.id}
               onSelect={onSelect}
+              onTransform={onTransform}
             />
           ))}
       </group>
@@ -275,10 +287,12 @@ function ModelPart({
   object,
   selected,
   onSelect,
+  onTransform,
 }: {
   object: ReturnType<typeof createInitialScene>['objects'][number]
   selected: boolean
   onSelect: (value: string) => void
+  onTransform: (objectId: string, transform: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }) => void
 }) {
   const ref = useRef<Object3D>(null)
 
@@ -288,15 +302,29 @@ function ModelPart({
         ref={ref}
         position={object.position}
         rotation={object.rotation}
-        scale={selected ? (object.scale.map((value) => value * 1.04) as [number, number, number]) : object.scale}
+        scale={object.scale}
         onClick={(event) => {
           event.stopPropagation()
           onSelect(object.id)
         }}
       >
-        {object.assetUrl ? <GeneratedModel url={object.assetUrl} /> : renderObjectMesh(object)}
+        {object.assetUrl ? <GeneratedModelBoundary url={object.assetUrl} /> : renderObjectMesh(object)}
       </group>
-      {selected && <TransformControls object={ref as React.RefObject<Object3D>} mode="translate" size={0.7} />}
+      {selected && (
+        <TransformControls
+          object={ref as React.RefObject<Object3D>}
+          mode="translate"
+          size={0.7}
+          onMouseUp={() => {
+            if (!ref.current) return
+            onTransform(object.id, {
+              position: [ref.current.position.x, ref.current.position.y, ref.current.position.z],
+              rotation: [ref.current.rotation.x, ref.current.rotation.y, ref.current.rotation.z],
+              scale: [ref.current.scale.x, ref.current.scale.y, ref.current.scale.z],
+            })
+          }}
+        />
+      )}
     </>
   )
 }
@@ -315,6 +343,19 @@ function GeneratedModel({ url }: { url: string }) {
     return clone
   }, [scene])
   return <primitive object={model} />
+}
+
+class GeneratedModelBoundary extends Component<{ url: string; children?: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  render() {
+    if (this.state.failed) return null
+    return <GeneratedModel url={this.props.url} />
+  }
 }
 
 function renderObjectMesh(object: ReturnType<typeof createInitialScene>['objects'][number]) {

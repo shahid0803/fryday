@@ -15,6 +15,29 @@ const OBJECT_ALIASES: Record<string, string[]> = {
   engine: ['engine', 'motor', 'e-motor', 'electric motor'],
 }
 
+export function insertGeneratedAsset(
+  scene: SceneState,
+  asset: { id: string; name: string; modelUrl: string; thumbnailUrl?: string },
+): { scene: SceneState; objectId: string } {
+  const baseId = normalizeText(asset.id).replace(/\s+/g, '-') || 'generated-asset'
+  let objectId = baseId
+  let suffix = 2
+  while (scene.objects.some((object) => object.id === objectId)) {
+    objectId = `${baseId}-${suffix}`
+    suffix += 1
+  }
+  const result = applySceneTool(scene, 'createObject', {
+    objectId,
+    name: asset.name,
+    type: 'generated-model',
+    assetUrl: asset.modelUrl,
+    thumbnailUrl: asset.thumbnailUrl,
+    position: [0, 0.8, 0],
+    scale: [1, 1, 1],
+  })
+  return { scene: result.scene, objectId }
+}
+
 const initialObjects: SceneObject[] = [
   { id: 'frame', name: 'Frame', type: 'frame', visible: true, position: [0, 0.9, 0], scale: [1, 1, 1], rotation: [0, 0, 0] },
   { id: 'front-wheel', name: 'Front Wheel', type: 'wheel', visible: true, position: [1.9, 0.55, 0], scale: [1, 1, 1], rotation: [0, 0, 0] },
@@ -26,6 +49,20 @@ const initialObjects: SceneObject[] = [
 ]
 
 export const sceneToolDefinitions: ToolDefinition[] = [
+  {
+    name: 'transformObject',
+    description: 'Apply position, rotation, and scale after a completed transform interaction.',
+    parameters: {
+      type: 'object',
+      properties: {
+        objectId: { type: 'string' },
+        position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+        rotation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+        scale: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+      },
+      required: ['objectId', 'position', 'rotation', 'scale'],
+    },
+  },
   {
     name: 'createObject',
     description: 'Create a new object in the scene.',
@@ -183,6 +220,27 @@ export function cloneSceneObjects(objects: SceneObject[]): SceneObject[] {
   }))
 }
 
+export function cloneSceneState(scene: SceneState): SceneState {
+  return {
+    scene: scene.scene,
+    selectedId: scene.selectedId,
+    objects: cloneSceneObjects(scene.objects),
+    history: scene.history.map((snapshot) => ({
+      scene: snapshot.scene,
+      selectedId: snapshot.selectedId,
+      objects: cloneSceneObjects(snapshot.objects),
+    })),
+  }
+}
+
+function sceneSnapshot(scene: SceneState) {
+  return {
+    scene: scene.scene,
+    selectedId: scene.selectedId,
+    objects: cloneSceneObjects(scene.objects),
+  }
+}
+
 export function getSceneContext(scene: SceneState): { scene: string; objects: Array<{ id: string; name: string; type: string; visible: boolean }> } {
   return {
     scene: scene.scene,
@@ -216,15 +274,8 @@ export function resolveObjectId(value: string, scene: SceneState): string | null
   return null
 }
 
-function pushSceneHistory(scene: SceneState): void {
-  scene.history = [
-    {
-      scene: scene.scene,
-      selectedId: scene.selectedId,
-      objects: cloneSceneObjects(scene.objects),
-    },
-    ...scene.history,
-  ].slice(0, 20)
+function pushSceneHistory(scene: SceneState): SceneState {
+  return { ...scene, history: [sceneSnapshot(scene), ...scene.history].slice(0, 20) }
 }
 
 function parseArray(value: unknown): number[] | null {
@@ -234,6 +285,8 @@ function parseArray(value: unknown): number[] | null {
 }
 
 export function applySceneTool(scene: SceneState, toolName: string, args: ToolArgumentRecord = {}): { scene: SceneState; result: ToolResult } {
+  scene = cloneSceneState(scene)
+
   if (toolName === 'getSceneState') {
     return {
       scene,
@@ -248,6 +301,7 @@ export function applySceneTool(scene: SceneState, toolName: string, args: ToolAr
 
   if (toolName === 'resetScene') {
     const reset = createInitialScene()
+    reset.history = [sceneSnapshot(scene)]
     return {
       scene: reset,
       result: { success: true, action: 'resetScene', message: 'Scene reset to the default Mountain Bike layout.' },
@@ -289,7 +343,7 @@ export function applySceneTool(scene: SceneState, toolName: string, args: ToolAr
       return { scene, result: { success: false, action: 'createObject', objectId, error: `Object ${objectId} already exists.` } }
     }
 
-    pushSceneHistory(scene)
+    scene = pushSceneHistory(scene)
     const position = parseArray(args.position) ?? [0, 0, 0]
     const scale = parseArray(args.scale) ?? [1, 1, 1]
     const assetUrl = typeof args.assetUrl === 'string' ? args.assetUrl : undefined
@@ -347,22 +401,37 @@ export function applySceneTool(scene: SceneState, toolName: string, args: ToolAr
   }
 
   if (toolName === 'removeObject') {
-    pushSceneHistory(scene)
+    scene = pushSceneHistory(scene)
     scene.objects = scene.objects.filter((entry) => entry.id !== resolvedId)
     scene.selectedId = scene.objects[0]?.id ?? 'frame'
     return { scene, result: { success: true, action: 'removeObject', objectId: resolvedId, message: `${target.name} removed.` } }
   }
 
   if (toolName === 'hideObject') {
-    pushSceneHistory(scene)
+    scene = pushSceneHistory(scene)
     target.visible = false
     return { scene, result: { success: true, action: 'hideObject', objectId: resolvedId, message: `${target.name} hidden.` } }
   }
 
   if (toolName === 'showObject') {
-    pushSceneHistory(scene)
+    scene = pushSceneHistory(scene)
     target.visible = true
     return { scene, result: { success: true, action: 'showObject', objectId: resolvedId, message: `${target.name} shown.` } }
+  }
+
+  if (toolName === 'transformObject') {
+    const position = parseArray(args.position)
+    const rotation = parseArray(args.rotation)
+    const scale = parseArray(args.scale)
+    if (!position || !rotation || !scale) {
+      return { scene, result: { success: false, action: 'transformObject', objectId: resolvedId, error: 'transformObject requires position, rotation, and scale arrays.' } }
+    }
+    scene = pushSceneHistory(scene)
+    target.position = [position[0] ?? 0, position[1] ?? 0, position[2] ?? 0] as [number, number, number]
+    target.rotation = [rotation[0] ?? 0, rotation[1] ?? 0, rotation[2] ?? 0] as [number, number, number]
+    target.scale = [scale[0] ?? 1, scale[1] ?? 1, scale[2] ?? 1] as [number, number, number]
+    scene.selectedId = resolvedId
+    return { scene, result: { success: true, action: 'transformObject', objectId: resolvedId, message: `${target.name} transformed.` } }
   }
 
   if (toolName === 'moveObject') {
@@ -370,7 +439,8 @@ export function applySceneTool(scene: SceneState, toolName: string, args: ToolAr
     if (!nextPosition) {
       return { scene, result: { success: false, action: 'moveObject', objectId: resolvedId, error: 'moveObject requires a 3-item position array.' } }
     }
-    pushSceneHistory(scene)
+
+    scene = pushSceneHistory(scene)
     target.position = [nextPosition[0] ?? 0, nextPosition[1] ?? 0, nextPosition[2] ?? 0] as [number, number, number]
     scene.selectedId = resolvedId
     return { scene, result: { success: true, action: 'moveObject', objectId: resolvedId, message: `${target.name} moved.` } }
@@ -381,7 +451,7 @@ export function applySceneTool(scene: SceneState, toolName: string, args: ToolAr
     if (!nextRotation) {
       return { scene, result: { success: false, action: 'rotateObject', objectId: resolvedId, error: 'rotateObject requires a 3-item rotation array.' } }
     }
-    pushSceneHistory(scene)
+    scene = pushSceneHistory(scene)
     target.rotation = [nextRotation[0] ?? 0, nextRotation[1] ?? 0, nextRotation[2] ?? 0] as [number, number, number]
     scene.selectedId = resolvedId
     return { scene, result: { success: true, action: 'rotateObject', objectId: resolvedId, message: `${target.name} rotated.` } }
@@ -392,7 +462,7 @@ export function applySceneTool(scene: SceneState, toolName: string, args: ToolAr
     if (!nextScale) {
       return { scene, result: { success: false, action: 'scaleObject', objectId: resolvedId, error: 'scaleObject requires a 3-item scale array.' } }
     }
-    pushSceneHistory(scene)
+    scene = pushSceneHistory(scene)
     target.scale = [nextScale[0] ?? 1, nextScale[1] ?? 1, nextScale[2] ?? 1] as [number, number, number]
     scene.selectedId = resolvedId
     return { scene, result: { success: true, action: 'scaleObject', objectId: resolvedId, message: `${target.name} scaled.` } }

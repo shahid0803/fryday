@@ -1,6 +1,6 @@
 import { parseTextCommand } from './realtimeTools'
 import { generate3DModel } from './generationClient'
-import { applySceneTool, createInitialScene } from '../scene/sceneTools'
+import { createInitialScene, insertGeneratedAsset } from '../scene/sceneTools'
 import type { ConnectionState, GenerationState, SceneState, TranscriptMessage } from '../types/scene'
 
 export type RealtimeClientListener<T> = (value: T) => void
@@ -96,7 +96,7 @@ export class RealtimeAIClient {
     }
   }
 
-  async sendText(text: string, scene: SceneState, updateScene: (nextScene: SceneState) => void): Promise<void> {
+  async sendText(text: string, updateScene: (updater: (scene: SceneState) => SceneState) => void): Promise<void> {
     this.addUserMessage(text)
     this.setStatus('THINKING')
 
@@ -109,17 +109,12 @@ export class RealtimeAIClient {
           this.onGenerationChange?.(state)
           this.setStatus(state.status === 'GENERATING' ? 'EXECUTING' : 'CONNECTED')
         })
-        const result = applySceneTool(scene, 'createObject', {
-          objectId: asset.id,
-          name: asset.name,
-          type: 'generated-model',
-          assetUrl: asset.modelUrl,
-          thumbnailUrl: asset.thumbnailUrl,
-          position: [0, 0.8, 0],
-          scale: [1, 1, 1],
+        let generatedScene: SceneState | null = null
+        updateScene((current) => {
+          generatedScene = insertGeneratedAsset(current, asset).scene
+          return generatedScene
         })
-        updateScene(result.scene)
-        this.onSceneChange?.(result.scene)
+        if (generatedScene) this.onSceneChange?.(generatedScene)
         this.addAssistantMessage(`${asset.name} is ready and added to the scene.`)
       } catch (error) {
         this.setStatus('ERROR')
@@ -129,20 +124,24 @@ export class RealtimeAIClient {
       return
     }
 
-    const result = parseTextCommand(text, scene)
+    let result: ReturnType<typeof parseTextCommand> | undefined
+    updateScene((current) => {
+      result = parseTextCommand(text, current)
+      return result.scene
+    })
     this.setStatus('EXECUTING')
 
-    if (!result.result.success) {
+    const commandResult = result
+    if (!commandResult || !commandResult.result.success) {
       this.setStatus('ERROR')
-      const message = result.result.error ?? 'Unsupported command.'
+      const message = commandResult?.result.error ?? 'Unsupported command.'
       this.addAssistantMessage(message)
       this.setStatus('CONNECTED')
       return
     }
 
-    updateScene(result.scene)
-    this.onSceneChange?.(result.scene)
-    const responseText = result.result.message ?? 'Command executed.'
+    this.onSceneChange?.(commandResult.scene)
+    const responseText = commandResult.result.message ?? 'Command executed.'
     this.addAssistantMessage(responseText)
     this.setStatus('CONNECTED')
   }

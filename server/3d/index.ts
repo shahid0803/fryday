@@ -4,13 +4,13 @@ import { MeshyProvider } from './meshyProvider'
 export function createTextTo3DProvider(): TextTo3DProvider | null {
   const apiKey = process.env.MESHY_API_KEY
   if (apiKey) return new MeshyProvider(apiKey)
-  if (process.env.NODE_ENV === 'development' && process.env.ENABLE_3D_MOCKS === 'true') {
+  if (process.env.NODE_ENV !== 'production' && process.env.ENABLE_3D_MOCKS === 'true') {
     return new DevelopmentMockProvider()
   }
   return null
 }
 
-class DevelopmentMockProvider implements TextTo3DProvider {
+export class DevelopmentMockProvider implements TextTo3DProvider {
   private readonly tasks = new Map<string, { createdAt: number; prompt: string }>()
 
   async createTask(input: TextTo3DRequest): Promise<TextTo3DTask> {
@@ -28,6 +28,7 @@ class DevelopmentMockProvider implements TextTo3DProvider {
       status: progress >= 100 ? 'SUCCEEDED' as const : 'IN_PROGRESS' as const,
       progress,
       provider: 'development-mock',
+      modelUrl: progress >= 100 ? '/mock-assets/mock-cube.glb' : undefined,
       error: undefined,
     }
   }

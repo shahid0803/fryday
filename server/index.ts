@@ -63,7 +63,7 @@ app.post('/api/realtime/session', async (_req, res) => {
         modalities: ['text', 'audio'],
       }),
     })
-    const payload = await response.json()
+    const payload = (await response.json()) as { error?: { message?: string } }
     if (!response.ok) {
       return res.status(response.status).json({
         ok: false,
